@@ -1,4 +1,4 @@
-;;; company-capf-noblock.el --- company-mode completion-at-point-functions backend -*- lexical-binding: t -*-
+;;; company-capfnb.el --- company-mode completion-at-point-functions backend -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2013-2019  Free Software Foundation, Inc.
 
@@ -32,12 +32,16 @@
 (require 'company)
 (require 'cl-lib)
 
-(defvar company-capf-noblock--cache nil)
+(defcustom company-capfnb-supported-evil-states `(insert replace emacs)
+  "The `evil-state's which `completion-at-point` function can be requested."
+  :type '(repeat symbol))
+
+(defvar company-capfnb--cache nil)
 
 ;; FIXME: Provide a way to save this info once in Company itself
 ;; (https://github.com/company-mode/company-mode/pull/845).
-(defvar-local company-capf-noblock--current-completion-data nil
-  "Value last returned by `company-capf-noblock' when called with `candidates'.
+(defvar-local company-capfnb--current-completion-data nil
+  "Value last returned by `company-capfnb' when called with `candidates'.
 For most properties/actions, this is just what we need: the exact values
 that accompanied the completion table that's currently is use.
 
@@ -45,26 +49,26 @@ that accompanied the completion table that's currently is use.
 a completion session (most importantly, by `company-sort-by-occurrence'),
 so we can't just use the preceding variable instead.")
 
-(defun company-capf-noblock--data ()
-  (let ((cache company-capf-noblock--cache))
+(defun company-capfnb--data ()
+  (let ((cache company-capfnb--cache))
     (if (and (equal (current-buffer) (car cache))
              (equal (point) (car (setq cache (cdr cache))))
              (equal (buffer-chars-modified-tick) (car (setq cache (cdr cache)))))
         (cadr cache)
-      (let ((data (while-no-input (company-capf-noblock--data-real))))
+      (let ((data (while-no-input (company-capfnb--data-real))))
         (if (or (eq data t) (not data)) nil
-          (setq company-capf-noblock--cache
+          (setq company-capfnb--cache
                 (list (current-buffer) (point) (buffer-chars-modified-tick) data))
           data)))))
 
-(defun company-capf-noblock--data-real ()
+(defun company-capfnb--data-real ()
   (cl-letf* (((default-value 'completion-at-point-functions)
               ;; Ignore tags-completion-at-point-function because it subverts
               ;; company-etags in the default value of company-backends, where
               ;; the latter comes later.
               (remove 'tags-completion-at-point-function
                       (default-value 'completion-at-point-functions)))
-             (completion-at-point-functions (company-capf-noblock--workaround))
+             (completion-at-point-functions (company-capfnb--workaround))
              (data (run-hook-wrapped 'completion-at-point-functions
                                      ;; Ignore misbehaving functions.
                                      #'completion--capf-wrapper 'optimist)))
@@ -72,7 +76,7 @@ so we can't just use the preceding variable instead.")
 
 (declare-function python-shell-get-process "python")
 
-(defun company-capf-noblock--workaround ()
+(defun company-capfnb--workaround ()
   ;; For http://debbugs.gnu.org/cgi/bugreport.cgi?bug=18067
   (if (or (not (listp completion-at-point-functions))
           (not (memq 'python-completion-complete-at-point completion-at-point-functions))
@@ -80,38 +84,41 @@ so we can't just use the preceding variable instead.")
       completion-at-point-functions
     (remq 'python-completion-complete-at-point completion-at-point-functions)))
 
-(defun company-capf-noblock--save-current-data (data)
-  (setq company-capf-noblock--current-completion-data data)
+(defun company-capfnb--save-current-data (data)
+  (setq company-capfnb--current-completion-data data)
   (add-hook 'company-after-completion-hook
-            #'company-capf-noblock--clear-current-data nil t))
+            #'company-capfnb--clear-current-data nil t))
 
-(defun company-capf-noblock--clear-current-data (_ignored)
-  (setq company-capf-noblock--current-completion-data nil))
+(defun company-capfnb--clear-current-data (_ignored)
+  (setq company-capfnb--current-completion-data nil))
 
-(defvar-local company-capf-noblock--sorted nil)
+(defvar-local company-capfnb--sorted nil)
 
-(defun company-capf-noblock (command &optional arg &rest _args)
+(defun company-capfnb (command &optional arg &rest _args)
   "`company-mode' backend using `completion-at-point-functions'."
   (interactive (list 'interactive))
   (pcase command
-    (`interactive (company-begin-backend 'company-capf-noblock))
+    (`interactive (company-begin-backend 'company-capfnb))
     (`prefix
-     (let ((res (company-capf-noblock--data)))
+     (let ((res (company-capfnb--data)))
        (when res
          (let ((length (plist-get (nthcdr 4 res) :company-prefix-length))
                (prefix (buffer-substring-no-properties (nth 1 res) (point))))
            (cond
+            ((and (boundp 'evil-state)
+                  (not (memq evil-state company-capfnb-supported-evil-states)))
+             'stop)
             ((> (nth 2 res) (point)) 'stop)
             (length (cons prefix length))
             (t prefix))))))
     (`candidates
-     (company-capf-noblock--candidates arg))
+     (company-capfnb--candidates arg))
     (`sorted
-     company-capf-noblock--sorted)
+     company-capfnb--sorted)
     (`match
      ;; Ask the for the `:company-match' function.  If that doesn't help,
      ;; fallback to sniffing for face changes to get a suitable value.
-     (let ((f (plist-get (nthcdr 4 company-capf-noblock--current-completion-data)
+     (let ((f (plist-get (nthcdr 4 company-capfnb--current-completion-data)
                          :company-match)))
        (if f (funcall f arg)
          (let* ((match-start nil) (pos -1)
@@ -136,31 +143,31 @@ so we can't just use the preceding variable instead.")
     (`no-cache t)   ;Not much can be done here, as long as we handle
                     ;non-prefix matches.
     (`meta
-     (let ((f (plist-get (nthcdr 4 company-capf-noblock--current-completion-data)
+     (let ((f (plist-get (nthcdr 4 company-capfnb--current-completion-data)
                          :company-docsig)))
        (when f (funcall f arg))))
     (`doc-buffer
-     (let ((f (plist-get (nthcdr 4 company-capf-noblock--current-completion-data)
+     (let ((f (plist-get (nthcdr 4 company-capfnb--current-completion-data)
                          :company-doc-buffer)))
        (when f (funcall f arg))))
     (`location
-     (let ((f (plist-get (nthcdr 4 company-capf-noblock--current-completion-data)
+     (let ((f (plist-get (nthcdr 4 company-capfnb--current-completion-data)
                          :company-location)))
        (when f (funcall f arg))))
     (`annotation
-     (let ((f (plist-get (nthcdr 4 company-capf-noblock--current-completion-data)
+     (let ((f (plist-get (nthcdr 4 company-capfnb--current-completion-data)
                          :annotation-function)))
        (when f (funcall f arg))))
     (`require-match
-     (plist-get (nthcdr 4 (company-capf-noblock--data)) :company-require-match))
+     (plist-get (nthcdr 4 (company-capfnb--data)) :company-require-match))
     (`init nil)      ;Don't bother: plenty of other ways to initialize the code.
     (`post-completion
-     (company-capf-noblock--post-completion arg))
+     (company-capfnb--post-completion arg))
     ))
 
-(defun company-capf-noblock--candidates (input)
-  (let ((res (company-capf-noblock--data)))
-    (company-capf-noblock--save-current-data res)
+(defun company-capfnb--candidates (input)
+  (let ((res (company-capfnb--data)))
+    (company-capfnb--save-current-data res)
     (when res
       (let* ((table (nth 3 res))
              (pred (plist-get (nthcdr 4 res) :predicate))
@@ -175,7 +182,7 @@ so we can't just use the preceding variable instead.")
              (base-size (and (numberp (cdr last)) (cdr last))))
         (when base-size
           (setcdr last nil))
-        (setq company-capf-noblock--sorted (functionp sortfun))
+        (setq company-capfnb--sorted (functionp sortfun))
         (when sortfun
           (setq candidates (funcall sortfun candidates)))
         (if (not (zerop (or base-size 0)))
@@ -185,8 +192,8 @@ so we can't just use the preceding variable instead.")
                       candidates))
           candidates)))))
 
-(defun company-capf-noblock--post-completion (arg)
-  (let* ((res company-capf-noblock--current-completion-data)
+(defun company-capfnb--post-completion (arg)
+  (let* ((res company-capfnb--current-completion-data)
          (exit-function (plist-get (nthcdr 4 res) :exit-function))
          (table (nth 3 res)))
     (if exit-function
@@ -203,6 +210,6 @@ so we can't just use the preceding variable instead.")
                      'sole
                    'finished)))))
 
-(provide 'company-capf-noblock)
+(provide 'company-capfnb)
 
-;;; company-capf-noblock.el ends here
+;;; company-capfnb.el ends here
