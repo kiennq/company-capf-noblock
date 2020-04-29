@@ -32,6 +32,10 @@
 (require 'company)
 (require 'cl-lib)
 
+(defgroup company-capfnb nil
+  "Completion backend for `completion-at-point'."
+  :group 'company)
+
 (defcustom company-capfnb-supported-evil-states `(insert replace emacs)
   "The `evil-state's which `completion-at-point` function can be requested."
   :type '(repeat symbol))
